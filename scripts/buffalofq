@@ -1,0 +1,259 @@
+#!/usr/bin/env python
+"""
+
+
+To do:
+    - add remote source
+    - add local dest
+    - add crc check on dest
+    - add multiple pre & post actions
+    - fix python pathing issues
+    - fix ssh key handling - hardcoded stuff
+
+"""
+
+import os
+import sys
+
+import appdirs
+import argparse
+import paramiko
+import time
+import errno
+import logging
+from pprint import pprint as pp
+from os.path import join as pjoin
+from os.path import isfile, isdir, exists, dirname, basename
+
+import cletus.cletus_job    as job
+import cletus.cletus_supp   as supp
+import cletus.cletus_config as conf
+import cletus.cletus_log    as log
+
+#--- our modules -------------------
+# get path set for running code out of project structure & testing
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# for some reason the code isn't finding the buffalofq module!
+#sys.path.insert(0, '/Users/kfarmer46/Envs/buffalofq/buffalofq')
+sys.path.insert(0, '/srv/home/ken.farmer/Envs/buffalofq_1404/buffalofq/buffalofq')
+
+import bfq_buffguts  as bfq_buffguts
+#import buffalofq.bfq_buffguts  as bfq_buffguts
+from _version import __version__
+
+logger       = None   # will get set to logging api later
+
+
+
+def main():
+    global logger
+
+    # get required startup info
+    app_name        = 'buffalofq'
+    instance_name   = app_name
+    args            = get_args()
+    if args.get('config_fqfn'):
+        audit_dir = config_dir = dirname(args['config_fqfn'])
+    else:
+        audit_dir = config_dir = appdirs.user_config_dir(app_name)
+
+    # get config info
+    config     = setup_config(args, app_name)
+    log_dir    = config['log_dir']
+
+    # setup logging
+    paramiko.util.log_to_file(pjoin(log_dir, 'buffalofq_paramiko.log'))
+    logger    = setup_logger(log_to_console=True, log_level=config['log_level'], log_dir=log_dir)
+    logger.info('Buffalofq starting now')
+    logger.info('config_name:        %s', config.get('config_name') or basename(config.get('config_fqfn')))
+    logger.info('audit_dir:          %s', audit_dir)
+    logger.info('limit_total:        %d', config['limit_total'])
+    logger.info('polling_seconds:    %d', config['polling_seconds'])
+    logger.info('source_host:        %s', config['source_host'])
+    logger.info('source_dir:         %s', config['source_dir'])
+    logger.info('source_post_dir:    %s', config['source_post_dir'])
+    logger.info('source_post_action: %s', config['source_post_action'])
+    logger.info('dest_host:          %s', config['dest_host'])
+    logger.info('dest_dir:           %s', config['dest_dir'])
+    logger.info('dest_post_action:   %s', config['dest_post_action'])
+    #logger.info('dest_post_dir:   %s', config['dest_post_dir'])
+
+    # Check to see if it's already running:
+    jobcheck = is_running(instance_name)
+    if not jobcheck.lock_pidfile():
+        logger.warning('buffalofq is already running - this instance will terminate')
+        sys.exit(0)
+
+    # Check to see if it has been suppressed - or put on hold:
+    suppcheck = is_suppressed(instance_name)
+    if suppcheck.suppressed(instance_name):
+        logger.warning('buffalofq has been suppressed - will terminate')
+        sys.exit(0)
+
+    # move files for all feeds
+    config_name = config.get('config_name') or basename(config.get('config_fqfn'))
+    bfq_buffguts.handle_all_feeds(config, audit_dir, suppcheck,
+                                  force=args['force'], limit_total=config['limit_total'],
+                                  config_name=config_name)
+
+    # termination & housekeeping
+    jobcheck.close()
+    logger.info('Buffalofq terminating now')
+
+
+
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--feedname')
+    parser.add_argument('--limit-total',
+                        type=int,
+                        help=('-1 = no limit - so run continuously, '
+                              ' 0 = no limit - run until you are out of files, '
+                              ' > 0 = process this many files then quit, '
+                              ' default is 0'))
+    parser.add_argument('--force',
+                        action='store_true',
+                        default=False)
+    parser.add_argument('--log-dir')
+    parser.add_argument('--log-level',
+                        dest='log_level',
+                        choices=['NOTSET','DEBUG','INFO','WARNING','ERROR','CRITICAL'],
+                        help="logging level - overrides config, default is None")
+    parser.add_argument('--console-log',
+                        action='store_true',
+                        dest='log_to_console')
+    parser.add_argument('--no-console-log',
+                        action='store_false',
+                        dest='log_to_console')
+    parser.add_argument('--data-root-dir')
+    parser.add_argument('--version',
+                        action='version',
+                        version=__version__,
+                        help='displays version number')
+    parser.add_argument('--config-name',
+                        help='Identifies the regular config by name within the xdg config dir')
+    parser.add_argument('--config-fqfn',
+                        help='Identifies the regular config by file name')
+    parser.add_argument('--long-help',
+                        help='Provides more verbose help')
+    args   = parser.parse_args()
+    return vars(args)
+
+
+def setup_config(args, name):
+
+    config_schema = {'type':  'object',
+                     'properties': {
+                           'name':           {'required':  True,
+                                              'type':      'string',
+                                              'maxLength': 50,
+                                              'blank':     False },
+                           'status':          {'required': True,
+                                               'enum': ['enabled','disabled'] },
+                           'limit_total':     {'required': True,
+                                               'type':     'integer',
+                                               'minimum': -1},
+                           'polling_seconds': {'required': True,
+                                               'type': 'integer',
+                                               'minimum': 1,
+                                               'maximum': 3600,
+                                               'blank':   False },
+                           'port':            {'required': True,
+                                               'type':     'integer',
+                                               'minimum':  0,
+                                               'maximum':  65535,
+                                               'blank':    False },
+                           'source_host':     {'required': True,
+                                               'type':     'string',
+                                               'blank':    False },
+                           'source_user':     {'required': True,
+                                               'type':     'string',
+                                               'blank':    False },
+                           'source_dir':      {'required': True,
+                                               'type':     'string',
+                                               'blank':    False},
+                           'source_fn':       {'required': True,
+                                               'type':     'string',
+                                               'blank':    False},
+                           'source_post_dir': {'required': False,
+                                               'type':     'string',
+                                               'blank':    True},
+                           'source_post_action': {'required': True,
+                                                'enum': ['delete','move','pass','pass'] },
+                           'dest_host':       {'required': True,
+                                               'type':     'string',
+                                               'blank':    False },
+                           'dest_user':       {'required': True,
+                                               'type':     'string',
+                                               'blank':    False },
+                           'dest_dir':        {'required': True,
+                                               'type':     'string',
+                                               'blank':    False},
+                           'source_fn':       {'required': False,
+                                               'type':     'string',
+                                               'blank':    True},
+                           'dest_post_dir':   {'required': False,
+                                               'type':     'string',
+                                               'blank':    False},
+                           'dest_post_action': {'required': True,
+                                                'enum': ['symlink','pass'] },
+                           'log_dir':          {}
+                                        }
+                    }
+    config_defaults = {'status':  'enabled',
+                       'limit_total':   0 }
+
+    config = conf.ConfigManager(config_schema)
+
+    #--- if args refer to a regular config file - then load that file now ---
+    if args.get('config_fqfn', None):
+        config.add_file(config_fqfn=args['config_fqfn'])
+    elif args.get('config_name', None):
+        config.add_file(app_name=name,
+                        config_fn='%s.yml' % args['config_name'])
+    else:
+        print('No config provided')
+
+    #--- add arg dictionary to config's namespace:
+    config.add_iterable(args)
+
+    #--- add defaults:
+    config.add_defaults(config_defaults)
+    if config.cm_config['log_dir']:
+        assert isdir(config.cm_config['log_dir'])
+
+    #--- validate the consolidated config:
+    config.validate()
+
+    return config.cm_config
+
+
+
+
+def setup_logger(log_to_console, log_level, log_dir, log_count=50):
+    cletus_logger = log.LogManager(log_name='__main__',
+                                   log_to_console=log_to_console,
+                                   log_count=log_count,
+                                   log_dir=log_dir,
+                                   log_fn='buffalofq.log')
+    cletus_logger.logger.setLevel(log_level or 'DEBUG')
+    bfq_buffguts.setup_logging('__main__')
+    return cletus_logger.logger
+
+
+def is_running(name):
+    jobchecker = job.JobCheck(app_name=name)
+    return jobchecker
+
+def is_suppressed(name):
+    suppchecker = supp.SuppressCheck(app_name=name, silent=True)
+    return suppchecker
+
+
+
+if __name__ == '__main__':
+    sys.exit(main())

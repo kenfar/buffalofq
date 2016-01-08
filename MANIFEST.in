@@ -1,0 +1,6 @@
+include requirements.txt
+recursive-include docs *
+include *.txt
+include *.md
+include *.rst
+recursive-include data *

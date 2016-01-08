@@ -1,0 +1,14 @@
+bin
+build
+dist
+dist/*
+include
+lib
+obsolete
+.pytest.restart
+*.pyc
+buffalofq.egg-info
+.*.swp
+.coverage
+__pycache__
+.tox
