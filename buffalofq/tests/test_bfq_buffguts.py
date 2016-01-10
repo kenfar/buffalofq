@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
-import sys
-import os
+import sys, os
+import getpass
 import tempfile
 import shutil
 import imp
@@ -10,13 +10,12 @@ import logging
 from pprint import pprint as pp
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-import test_tools
+import bfq_test_tools  as test_tools
 import buffalofq.bfq_buffguts as mod
-#import bfq_buffguts as mod
 
 verbose = False
-SOURCE_USER = 'foo'
-DEST_USER   = 'foo'
+SOURCE_USER = getpass.getuser()
+DEST_USER   = getpass.getuser()
 
 
 def setup_logging():
@@ -63,6 +62,50 @@ class TestLocalToRemoteCopy(object):
         test_tools.remove_all_buffalofq_temp_dirs()
 
 
+    def test_file_sorting_by_None(self):
+        feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
+        feed['sort_key'] = None
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        files = ['f', 'e', 'd', 'c', 'b', 'a']
+        assert OneFeed._sort_files(files) == ['f', 'e', 'd', 'c', 'b', 'a']
+
+        files = []
+        assert OneFeed._sort_files(files) == []
+
+        OneFeed.close()
+
+
+    def test_file_sorting_by_name(self):
+        feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
+        feed['sort_key'] = 'name'
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        files = ['f', 'e', 'd', 'c', 'b', 'a']
+        assert OneFeed._sort_files(files) == ['a', 'b', 'c', 'd', 'e', 'f']
+
+        files = []
+        assert OneFeed._sort_files(files) == []
+
+        OneFeed.close()
+
+
+
+    def test_file_sorting_by_key(self):
+        feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        OneFeed.feed['sort_key'] = 'field:date'
+        files = ['foo_date-2015.csv', 'bar_date-2016.csv', 'mook_date-2014.csv']
+        assert OneFeed._sort_files(files) == ['mook_date-2014.csv', 'foo_date-2015.csv', 'bar_date-2016.csv']
+
+        files = []
+        assert OneFeed._sort_files(files) == []
+
+        OneFeed.close()
+
+
+
     def test_copy_many_files(self):
         """ Tests copying many files from source to dest
             AND leaving source files alone afterwards
@@ -72,8 +115,9 @@ class TestLocalToRemoteCopy(object):
         print('======================== Test: happypath ==========================')
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
 
-        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, force=True)
-        OneFeed.do_all_files()
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        OneFeed.run(force=True)
         OneFeed.close()
 
         assert len(glob.glob(os.path.join(self.source_data_dir,'good*'))) > 0
@@ -92,14 +136,13 @@ class TestLocalToRemoteCopy(object):
             AND deleting source files
             AND ignoring other files in all directories.
         """
-        print
-        print('======================== Test: source_post_action_delete  ==========================')
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         feed['source_post_dir']    = ''
         feed['source_post_action'] = 'delete'
 
-        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, force=True)
-        OneFeed.do_all_files()
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        OneFeed.run(force=True)
         OneFeed.close()
 
         # first make this feature doesn't break any other logic:
@@ -121,14 +164,13 @@ class TestLocalToRemoteCopy(object):
             AND archiving source files
             AND ignoring other files in all directories.
         """
-        print
-        print('======================== Test: source_post_action_move  ==========================')
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         feed['source_post_dir']    = self.source_arc_dir
         feed['source_post_action'] = 'move'
 
-        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, force=True)
-        OneFeed.do_all_files()
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        OneFeed.run(force=True)
         OneFeed.close()
 
         # first make this feature doesn't break any other logic:
@@ -150,17 +192,14 @@ class TestLocalToRemoteCopy(object):
             AND ignoring other files in all directories.
             AND running a crc check on dest files
         """
-        print
-        print('======================== Test: dest_post_action_symlink  ==========================')
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         feed['dest_post_action'] = 'symlink'
         feed['dest_post_action_symlink_dir'] = self.dest_link_dir
         feed['dest_post_action_symlink_fn']  = 'good_link'
 
-        OneFeed = mod.HandleOneFeed(feed,
-                                    self.feed_audit_dir,
-                                    force=True)
-        OneFeed.do_all_files()
+        OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
+        OneFeed.run(force=True)
         OneFeed.close()
 
         # first make sure symlink doesn't break any other logic:
@@ -281,11 +320,10 @@ class TestTaskRecovery(object):
         mod.FAIL_STEP    = failstep
         mod.FAIL_SUBSTEP = failsubstep
         mod.FAIL_CATCH   = failcatch
-        OneFeed = mod.HandleOneFeed(self.feed,
-                                    self.feed_audit_dir,
-                                    force=True)
+        OneFeed = mod.HandleOneFeed(self.feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
         try:
-            OneFeed.do_all_files()
+            OneFeed.run(force=True)
         except SystemExit:
             print '~~~~~~ test_recovery - systemexit ~~~~~~~~'
         self.broken_file = OneFeed.auditor.status['fn']
@@ -342,12 +380,11 @@ class TestTaskRecovery(object):
         mod.FAIL_STEP    = -1
         mod.FAIL_SUBSTEP = -1
         mod.FAIL_CATCH   = failcatch
-        OneFeed = mod.HandleOneFeed(self.feed,
-                                    self.feed_audit_dir,
-                                    force=True)
+        OneFeed = mod.HandleOneFeed(self.feed, self.feed_audit_dir, limit_total=0,
+                                    config_name=None, key_filename='id_auto')
         self.feed['source_post_dir']    = self.dirs['source_arc']['name']
         self.feed['source_post_action'] = 'move'
-        OneFeed.do_all_files()
+        OneFeed.run(force=True)
 
         if not failstep:
             recovery_ran = False
@@ -556,13 +593,12 @@ def _make_default_feed(source_data_dir, dest_data_dir):
     feed['name']            = 'source_2_dest'
     feed['status']          = 'enabled'
     feed['polling_seconds'] = '10'
+    feed['sort_key']        = 'name'
     feed['source_host']     = 'localhost'
-    #feed['source_user']     = 'kfarmer46'
     feed['source_user']     = SOURCE_USER
     feed['source_dir']      = source_data_dir
     feed['source_fn']       = 'good*'
     feed['dest_host']       = 'localhost'
-    #feed['dest_user']       = 'kfarmer46'
     feed['dest_user']       = DEST_USER
     feed['dest_dir']        = dest_data_dir
     feed['dest_fn']         = ''

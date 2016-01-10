@@ -9,24 +9,18 @@
            - confirm polling
       - Test multi-job checker
 """
-import sys
-import os
+import sys, os, getpass, shutil, time
 import tempfile
-import shutil
 import imp
 import glob
 import yaml
-import time
 from pprint import pprint as pp
 from os.path import join as pjoin
 from os.path import dirname, basename, exists, isfile, isdir
 
 import test_tools
 
-
-mod = test_tools.load_script('buffalofq')
-
-USER = 'foo'
+USER = getpass.getuser()
 verbose = False
 
 
@@ -42,7 +36,7 @@ class TestLocalToRemoteCopy(object):
         self.feed_audit_dir  = tempfile.mkdtemp(prefix='bfq_fa_')
         self.config_dir      = tempfile.mkdtemp(prefix='bfq_c_')
         self.log_dir         = tempfile.mkdtemp(prefix='bfq_l_')
-        self.pgm_path        = pjoin(dirname(os.path.split(os.path.abspath(__file__))[0]), 'buffalofq')
+        self.pgm_path        = pjoin(dirname(os.path.split(os.path.abspath(__file__))[0]), 'buffalofq_mover')
         _make_file(self.source_data_dir,  'good')
         _make_file(self.source_data_dir,  'good')
         _make_file(self.source_data_dir,  'good')
@@ -188,19 +182,19 @@ def _make_default_config(config_dir, log_dir, **kwargs):
           source_dir and dest_dir must be provided.
     """
     feed = {}
-    feed['name']            = 'source_2_dest'
-    feed['status']          = 'enabled'
-    feed['polling_seconds'] = 1
-    feed['limit_total']     = 0
-    feed['source_host']     = 'localhost'
-    feed['source_user']     = USER
-    feed['source_dir']      = None
-    feed['source_fn']       = 'good*'
-    feed['dest_host']       = 'localhost'
-    feed['dest_user']       = USER
-    feed['dest_dir']        = None
-    feed['dest_fn']         = ''
-    feed['port']            = 22
+    feed['name']               = 'source_2_dest'
+    feed['status']             = 'enabled'
+    feed['polling_seconds']    = 1
+    feed['limit_total']        = 0
+    feed['source_host']        = 'localhost'
+    feed['source_user']        = USER
+    feed['source_dir']         = None
+    feed['source_fn']          = 'good*'
+    feed['dest_host']          = 'localhost'
+    feed['dest_user']          = USER
+    feed['dest_dir']           = None
+    feed['dest_fn']            = ''
+    feed['port']               = 22
     feed['source_post_action'] = 'pass'
     feed['source_post_dir']    = ''
     feed['dest_post_action']   = 'pass'

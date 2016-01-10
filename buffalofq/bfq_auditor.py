@@ -6,7 +6,7 @@ import sys
 from os.path import join as pjoin
 from os.path import isfile, isdir, exists, dirname, basename
 
-import yaml
+import json
 import time
 import logging
 from pprint import pprint as pp
@@ -20,22 +20,24 @@ class FeedAuditor(object):
 	Used to determine when to next poll as well as to help
 	in recoveries.
     """
-    def __init__(self, feed_name, data_dir, config_name):
+    def __init__(self, feed_name, data_dir, config_name, verbose=False):
 
         setup_logging('__main__')
-        logger.debug('FeedAuditor starting now')
+        if verbose:
+            logger.debug('FeedAuditor starting now')
 
         self.feed_name       = feed_name
         self.data_dir        = data_dir
-        self.audit_fqfn      = pjoin(data_dir, '%s_audit.yml' % config_name)
+        self.audit_fqfn      = pjoin(data_dir, '%s_audit.json' % config_name)
         self.start_time      = time.time()
-        logger.info('audit_fqfn: %s', self.audit_fqfn)
+        if verbose:
+            logger.debug('audit_fqfn: %s', self.audit_fqfn)
         if not isdir(dirname(self.audit_fqfn)):
             logger.critical('Invalid audit_fqfn - dir does not exist: %s' % self.audit_fqfn)
             sys.exit(1)
 
-        self.all_feed_status = self.read()
-        self.status          = self.all_feed_status[self.feed_name]   # just a shortcut
+        self.feed_status = self.read()
+        self.status          = self.feed_status[self.feed_name]   # just a shortcut
         if (self.status['step'] in [0, 6]
             and self.status['status'] == 'stop'
             and self.status['result'] == 'pass'):
@@ -44,12 +46,12 @@ class FeedAuditor(object):
             self.mode            = 'recovery'
 
     def read(self):
-	"""Read entire feed_status yaml file into class dictionary.
+	"""Read entire feed_status json file into class dictionary.
            If the file doesn't exist, set up a minimal default.
 	"""
         try:
             with open(self.audit_fqfn, 'r') as f:
-                return yaml.safe_load(f)
+                return json.load(f)
         except IOError, e:
             if e.errno == 2:
                 feed_status_rec = {}
@@ -69,9 +71,9 @@ class FeedAuditor(object):
         assert 10 > step >= 0
         assert status in ['start','stop']
         assert result in ['pass', 'fail', 'tbd', True, False]
-        if result == True:
+        if result is True:
             result = 'pass'
-        elif result == False:
+        elif result is False:
             result = 'fail'
         if status == 'start':
             result = 'tbd'
@@ -84,9 +86,8 @@ class FeedAuditor(object):
             self.status['fn']      = fn
         self.status['empty_audit'] = False
 
-        #print self.status
         with open(self.audit_fqfn, 'w') as f:
-            f.write(yaml.dump(self.all_feed_status))
+            f.write(json.dumps(self.feed_status))
 
 
 

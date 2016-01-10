@@ -1,30 +1,24 @@
 #!/usr/bin/env python
 """
-
+A simple and reliable file movement utility.
 
 To do:
     - add remote source
     - add local dest
     - add crc check on dest
     - add multiple pre & post actions
-    - fix python pathing issues
-    - fix ssh key handling - hardcoded stuff
-
 """
 
-import os
-import sys
+import os, sys, time
 
-import appdirs
 import argparse
-import paramiko
-import time
 import errno
 import logging
 from pprint import pprint as pp
-from os.path import join as pjoin
-from os.path import isfile, isdir, exists, dirname, basename
+from os.path import isfile, isdir, exists, dirname, basename, join as pjoin
 
+import paramiko
+import appdirs
 import cletus.cletus_job    as job
 import cletus.cletus_supp   as supp
 import cletus.cletus_config as conf
@@ -32,19 +26,14 @@ import cletus.cletus_log    as log
 
 #--- our modules -------------------
 # get path set for running code out of project structure & testing
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, dirname(dirname(os.path.abspath(__file__))))
 
-# for some reason the code isn't finding the buffalofq module!
-#sys.path.insert(0, '/Users/kfarmer46/Envs/buffalofq/buffalofq')
-sys.path.insert(0, '/srv/home/ken.farmer/Envs/buffalofq_1404/buffalofq/buffalofq')
+import buffalofq.bfq_auditor   as bfq_auditor
+import buffalofq.bfq_buffguts  as bfq_buffguts
+from buffalofq._version import __version__
 
-import bfq_buffguts  as bfq_buffguts
-#import buffalofq.bfq_buffguts  as bfq_buffguts
-from _version import __version__
-
-logger       = None   # will get set to logging api later
+logger   = None   # will get set to logging api later
+APP_NAME = 'buffalofq_mover'
 
 
 
@@ -52,24 +41,39 @@ def main():
     global logger
 
     # get required startup info
-    app_name        = 'buffalofq'
-    instance_name   = app_name
     args            = get_args()
     if args.get('config_fqfn'):
         audit_dir = config_dir = dirname(args['config_fqfn'])
     else:
-        audit_dir = config_dir = appdirs.user_config_dir(app_name)
+        audit_dir = config_dir = appdirs.user_config_dir(APP_NAME)
 
     # get config info
-    config     = setup_config(args, app_name)
-    log_dir    = config['log_dir']
+    config      = setup_config(args, APP_NAME)
+    log_dir     = config['log_dir']
+    config_name = config.get('config_name') or os.path.splitext(basename(config.get('config_fqfn')))[0]
+    instance_name = APP_NAME + '_' + config_name
 
     # setup logging
     paramiko.util.log_to_file(pjoin(log_dir, 'buffalofq_paramiko.log'))
     logger    = setup_logger(log_to_console=True, log_level=config['log_level'], log_dir=log_dir)
+
+    # Check to see if it's already running:
+    jobcheck = is_running(instance_name)
+    if not jobcheck.lock_pidfile():
+        logger.warning('buffalofq_mover is already running for this config - this instance will terminate')
+        sys.exit(0)
+
+    # Check to see if it has been suppressed - or put on hold:
+    suppcheck = is_suppressed(APP_NAME)
+    if suppcheck.suppressed(APP_NAME):
+        logger.warning('buffalofq_mover has been suppressed - will terminate')
+        sys.exit(0)
+
+    # Move files
     logger.info('Buffalofq starting now')
-    logger.info('config_name:        %s', config.get('config_name') or basename(config.get('config_fqfn')))
+    logger.info('config_dir:         %s', config_dir)
     logger.info('audit_dir:          %s', audit_dir)
+    logger.info('config_name:        %s', config_name)
     logger.info('limit_total:        %d', config['limit_total'])
     logger.info('polling_seconds:    %d', config['polling_seconds'])
     logger.info('source_host:        %s', config['source_host'])
@@ -79,25 +83,13 @@ def main():
     logger.info('dest_host:          %s', config['dest_host'])
     logger.info('dest_dir:           %s', config['dest_dir'])
     logger.info('dest_post_action:   %s', config['dest_post_action'])
-    #logger.info('dest_post_dir:   %s', config['dest_post_dir'])
 
-    # Check to see if it's already running:
-    jobcheck = is_running(instance_name)
-    if not jobcheck.lock_pidfile():
-        logger.warning('buffalofq is already running - this instance will terminate')
-        sys.exit(0)
-
-    # Check to see if it has been suppressed - or put on hold:
-    suppcheck = is_suppressed(instance_name)
-    if suppcheck.suppressed(instance_name):
-        logger.warning('buffalofq has been suppressed - will terminate')
-        sys.exit(0)
-
-    # move files for all feeds
-    config_name = config.get('config_name') or basename(config.get('config_fqfn'))
-    bfq_buffguts.handle_all_feeds(config, audit_dir, suppcheck,
-                                  force=args['force'], limit_total=config['limit_total'],
-                                  config_name=config_name)
+    one_feed = bfq_buffguts.HandleOneFeed(config,
+                                          audit_dir,
+                                          limit_total=config['limit_total'],
+                                          config_name=config_name,
+                                          key_filename=config['key_filename'])
+    one_feed.run(args['force'], suppcheck)
 
     # termination & housekeeping
     jobcheck.close()
@@ -107,7 +99,7 @@ def main():
 
 
 def get_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description='A simple and reliable file movement utility')
     parser.add_argument('--feedname')
     parser.add_argument('--limit-total',
                         type=int,
@@ -117,27 +109,29 @@ def get_args():
                               ' default is 0'))
     parser.add_argument('--force',
                         action='store_true',
-                        default=False)
+                        default=False,
+                        help='forces immediate run even if polling duration not met')
     parser.add_argument('--log-dir')
     parser.add_argument('--log-level',
                         dest='log_level',
-                        choices=['NOTSET','DEBUG','INFO','WARNING','ERROR','CRITICAL'],
-                        help="logging level - overrides config, default is None")
+                        choices=['debug','info','warning','error','critical'],
+                        help="logging level - overrides config, default is debug")
     parser.add_argument('--console-log',
                         action='store_true',
                         dest='log_to_console')
     parser.add_argument('--no-console-log',
                         action='store_false',
                         dest='log_to_console')
-    parser.add_argument('--data-root-dir')
+    parser.add_argument('--key-filename',
+                        help='name of ssh keyfile to use')
     parser.add_argument('--version',
                         action='version',
                         version=__version__,
                         help='displays version number')
     parser.add_argument('--config-name',
-                        help='Identifies the regular config by name within the xdg config dir')
+                        help='Identifies the config by name within the xdg config dir')
     parser.add_argument('--config-fqfn',
-                        help='Identifies the regular config by file name')
+                        help='Identifies the config by file name')
     parser.add_argument('--long-help',
                         help='Provides more verbose help')
     args   = parser.parse_args()
@@ -154,6 +148,7 @@ def setup_config(args, name):
                                               'blank':     False },
                            'status':          {'required': True,
                                                'enum': ['enabled','disabled'] },
+                           'key_filename':    {'required': True},
                            'limit_total':     {'required': True,
                                                'type':     'integer',
                                                'minimum': -1},
@@ -167,6 +162,10 @@ def setup_config(args, name):
                                                'minimum':  0,
                                                'maximum':  65535,
                                                'blank':    False },
+                           'log_dir':          {},
+                           'log_level':       {'required': True,
+                                               'enum': ['debug', 'info', 'warning', 'error', 'critical']},
+                           'sort_key':        {'required': True},
                            'source_host':     {'required': True,
                                                'type':     'string',
                                                'blank':    False },
@@ -183,7 +182,7 @@ def setup_config(args, name):
                                                'type':     'string',
                                                'blank':    True},
                            'source_post_action': {'required': True,
-                                                'enum': ['delete','move','pass','pass'] },
+                                                'enum': ['delete','move','pass'] },
                            'dest_host':       {'required': True,
                                                'type':     'string',
                                                'blank':    False },
@@ -200,12 +199,15 @@ def setup_config(args, name):
                                                'type':     'string',
                                                'blank':    False},
                            'dest_post_action': {'required': True,
-                                                'enum': ['symlink','pass'] },
-                           'log_dir':          {}
+                                                'enum': ['symlink','pass'] }
                                         }
                     }
-    config_defaults = {'status':  'enabled',
-                       'limit_total':   0 }
+    config_defaults = {'status':       'enabled',
+                       'limit_total':   0  ,
+                       'source_host':  'localhost',
+                       'key_filename': 'id_auto',
+                       'log_level':    'debug',
+                       'sort_key':     None }
 
     config = conf.ConfigManager(config_schema)
 
@@ -228,6 +230,9 @@ def setup_config(args, name):
 
     #--- validate the consolidated config:
     config.validate()
+    if config.cm_config['source_host'] != 'localhost':
+        print('CRITICAL: Source_host of other than localhost not yet supported')
+        sys.exit(1)
 
     return config.cm_config
 
@@ -239,8 +244,8 @@ def setup_logger(log_to_console, log_level, log_dir, log_count=50):
                                    log_to_console=log_to_console,
                                    log_count=log_count,
                                    log_dir=log_dir,
-                                   log_fn='buffalofq.log')
-    cletus_logger.logger.setLevel(log_level or 'DEBUG')
+                                   log_fn='buffalofq_mover.log')
+    cletus_logger.logger.setLevel('DEBUG' if log_level is None else log_level.upper())
     bfq_buffguts.setup_logging('__main__')
     return cletus_logger.logger
 

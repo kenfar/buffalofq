@@ -23,7 +23,7 @@ REQUIREMENTS = [str(ir.req) for ir in parse_requirements('requirements.txt', ses
 setup(name              = 'buffalofq',
       version           = VERSION,
       description       = DESCRIPTION,
-      long_description  = (read('README.rst')
+      long_description  = (read('README.rst') 
                            + '\n\n'
                            + read('CHANGELOG.rst')),
       keywords          = "data management file utility",
@@ -33,8 +33,8 @@ setup(name              = 'buffalofq',
       license           = 'BSD',
       classifiers       = ['Programming Language :: Python :: 2.7',
                            'Programming Language :: Python :: Implementation :: CPython',
-                           'Programming Language :: Python :: Implementation :: PyPy'],
+                           'Programming Language :: Python :: Implementation :: PyPy' ],
       install_requires  = REQUIREMENTS,
       packages          = find_packages(),
-      scripts           = [ 'scripts/buffalofq']
+      scripts           = [ 'scripts/buffalofq_mover']
       )

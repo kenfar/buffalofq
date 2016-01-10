@@ -1,15 +1,10 @@
 #!/usr/bin/env python
-"""
 
-
-
-"""
-import os
-import sys
-import time
+import os, sys, time
 import errno
 import logging
 import os.path
+from os.path import dirname, basename, exists, isdir, isfile, join as pjoin
 
 import fnmatch
 import paramiko
@@ -25,66 +20,15 @@ FAIL_CATCH   = False  # used by test-harness to force fails
 logger       = None   # will get set to logging api later
 
 
-def handle_all_feeds(feed, audit_dir, suppcheck, force=False, limit_total=0, log_level='DEBUG', config_name=None):
-    """
-    This function is a left-over from a prior version that supported multiple feeds
-    defined in the config.  Right now it only supports a single feed/config.
-
-    This code should be refactored away.
-
-    limit_total of -1 = run continuously, 0 = run until out of files, >0 = run for that many
-    """
-
-    logger.debug('BuffGuts (handle_all_feeds) starting')
-    processed_last_time = 0
-    processed_file_cnt  = 0
-
-    while True:
-
-        if suppcheck.suppressed(feed):
-            logger.warning('feed %s has been suppressed - will not be run at this time' % feed)
-            return
-
-        one_feed = HandleOneFeed(feed, audit_dir, force=False, limit_total=limit_total,
-                                 start_file_cnt=processed_file_cnt,
-                                 config_name=os.path.splitext(config_name)[0])
-        if one_feed.poll_good:
-            if one_feed.files:
-                logger.info('Handle_all_feeds: processing feed: %s' % feed['name'])
-                one_feed.do_all_files()
-                processed_last_time = time.time()
-                processd_file_cnt = one_feed.file_cnt
-        elif force:
-            logger.info('Handle_all_feeds: processing feed: %s' % feed['name'])
-            logger.info('Insufficient Polling Duration - will force anyway')
-            one_feed.do_all_files()
-            processed_last_time = time.time()
-            processd_file_cnt = one_feed.file_cnt
-        else:
-            # after 5 minutes of polling write a log message:
-            if (time.time() - processed_last_time) > 300:
-                logger.info('polling continuing')
-            # can safely sleep for a few:
-            logger.info('ken: about to sleep, limit_total:%d', limit_total)
-            time.sleep(feed['polling_seconds'])
-
-        one_feed.close()
-
-        # Quit if not running continuously:
-        if limit_total > -1:
-            break
-
-
 
 class HandleOneFeed(object):
 
     def __init__(self,
                  feed,
                  audit_dir,
-                 force=True,
-                 limit_total=0,
-                 start_file_cnt=0,
-                 config_name=None):
+                 limit_total,
+                 config_name,
+                 key_filename):
 
         self.feed            = feed
         self.auditor         = bfq_auditor.FeedAuditor(self.feed['name'], audit_dir, config_name=config_name)
@@ -95,11 +39,12 @@ class HandleOneFeed(object):
         self.files           = None
         self.transport       = None
         self.sftp            = None
+        self.key_filename    = key_filename
         self.mykey           = None
-        self.file_cnt        = start_file_cnt
-        self.start_feed(force)
+        self.file_cnt        = 0
 
-    def start_feed(self, force=False):
+
+    def file_check(self, force=False):
         self._check_prereqs()
         if self.poll_good or force:
             self.files = self._get_files_to_move()
@@ -122,6 +67,44 @@ class HandleOneFeed(object):
         if self.sftp:
             self.sftp.close()
             self.transport.close()
+
+
+    def run(self, force, suppcheck=None):
+
+        processed_last_time = 0
+        logger.info('HandleOneFeeds run starting')
+
+        while True:
+
+            if suppcheck:  # suppcheck will be None for testing
+                if suppcheck.suppressed(self.feed):
+                    logger.warning('feed has been suppressed - will terminate')
+                    break
+
+            self.file_check(force)
+
+            if self.poll_good:
+                if self.files:
+                    self.do_all_files()
+                processed_last_time = time.time()
+            elif force:
+                if self.files:
+                    logger.info('Insufficient Polling Duration - will force anyway')
+                    self.do_all_files()
+                processed_last_time = time.time()
+            else:
+                # after 5 minutes of polling write a log message:
+                if (time.time() - processed_last_time) > 300:
+                    logger.info('polling continuing')
+                    processed_last_time = time.time()
+                # can safely sleep for a few:
+                time.sleep(self.feed['polling_seconds'])
+
+            # Quit if not running continuously:
+            if self.limit_total > -1:
+                break
+
+        self.close()
 
 
     def do_all_files(self):
@@ -171,7 +154,6 @@ class HandleOneFeed(object):
             file system.  In a recovery scenario it only gets the file
             name that previously failed.
         """
-        # todo: should get the oldest X number of files, sorted by various fields
         # todo: need to support both pushing & pulling files
         step = 0
         self.poll_last_time = time.time()
@@ -183,18 +165,40 @@ class HandleOneFeed(object):
         else:
             self.auditor.write(step=step, status='start', fn='')
             source_files   = os.listdir(self.feed['source_dir'])
+            #logger.debug('files found: %d' % len(source_files))
             filtered_files = fnmatch.filter(source_files,
                                             self.feed['source_fn'])
+            #logger.debug('files found - after filtering: %d' % len(filtered_files))
+            sorted_filtered_files = self._sort_files(filtered_files)
+            #logger.debug('files found - after sorting: %d' % len(sorted_filtered_files))
             fail_check(step)
             self.auditor.write(step=step, status='stop', result='pass')
-            return filtered_files
+            return sorted_filtered_files
+
+
+    def _sort_files(self, files):
+        """ Uses self.feed['sort_key']:
+                - None = no sort
+                - name = alphabetic on name
+                - 'field:?' = looks for this key in filename, sorts by associated value
+        """
+        if self.feed['sort_key'] is None:
+            return files
+        elif self.feed['sort_key'] == 'name':
+            return sorted(files)
+        elif self.feed['sort_key'].startswith('field:'):
+            parts = self.feed['sort_key'].split(':')
+            return sort_files_by_fields(files, parts[1])
+        else:
+            msg = 'Invalid sort_key: %s' % self.feed['sort_key']
+            logger.critical(msg)
+            raise ValueError(msg)
 
 
     def _get_key(self):
         # todo: allow user to specify key to use via config file
         # private key must not be encrypted (must not have a passphrase):
-        pkfile = os.path.expanduser('~/.ssh/id_auto')
-        #pkfile = os.path.expanduser('~/.ssh/id_rsa')
+        pkfile = os.path.expanduser('~/.ssh/%s' % self.key_filename)
         return paramiko.RSAKey.from_private_key_file(pkfile)
 
 
@@ -207,6 +211,8 @@ class HandleOneFeed(object):
                           pkey=self.mykey)
         sftp = paramiko.SFTPClient.from_transport(transport)
         return transport, sftp
+
+
 
 
 
@@ -335,15 +341,12 @@ class HandleOneFile(object):
 
 
     def _do_source_post_actions(self):
-        # delete file
-        # move file
         # rename file
-
         if self.feed.get('source_post_action', 'unk') == 'delete':
             return task_delete_source_file(self.source_fqfn)
         elif self.feed.get('source_post_action', 'unk') == 'move':
             return task_move_source_file(self.source_fqfn,
-                           os.path.join(self.feed['source_post_dir'], self.file))
+                           pjoin(self.feed['source_post_dir'], self.file))
         else:
             return True
 
@@ -452,4 +455,24 @@ def setup_logging(log_name):
     logger = logging.getLogger(log_name + '.buffguts')
 
 
+def sort_files_by_fields(files, *keys):
+    def fn_sort(fn):
+        vals = []
+        for key in keys:
+           vals.append(filename_field_get(fn, key))
+        return  tuple(vals)
+    files.sort(key=fn_sort)
+    return files
+
+def filename_field_get(filename, key):
+    assert filename is not None
+    assert key is not None
+
+    segments = basename(filename).split('.')
+    kv_pairs = segments[0].split('_')
+    for kv in kv_pairs:
+        kv_parts = kv.split('-')
+        if len(kv_parts) == 2:
+            if kv_parts[0] == key:
+                return kv_parts[1]
 
