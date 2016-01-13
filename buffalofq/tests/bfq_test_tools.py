@@ -5,6 +5,8 @@ import imp
 import glob
 import tempfile
 import shutil
+from os.path import dirname, basename, exists, isfile, isdir, join as pjoin
+
 
 def load_script(script):
     """ Imports script from parent directory.  Has following features:
@@ -15,7 +17,7 @@ def load_script(script):
     script_dir = os.path.dirname(test_dir)
     py_source_open_mode = "U"
     py_source_description = (".py", py_source_open_mode, imp.PY_SOURCE)
-    script_filepath = os.path.join(script_dir, script)
+    script_filepath = pjoin(script_dir, script)
     with open(script_filepath, py_source_open_mode) as script_file:
         mod = imp.load_module(script, script_file, script_filepath, py_source_description)
     return mod
@@ -30,8 +32,8 @@ def remove_all_buffalofq_temp_dirs():
     """ The objective of this code is to eliminate directories left over from prior
         test runs - that crashed before the temp dirs could be removed.
     """
-    ###[os.remove(f) for f in glob.glob(os.path.join(self.feed_audit_dir, '*'))]
-    for file in glob.glob(os.path.join(tempfile.gettempdir(), 'bfq_*')):
+    ###[os.remove(f) for f in glob.glob(pjoin(self.feed_audit_dir, '*'))]
+    for file in glob.glob(pjoin(tempfile.gettempdir(), 'bfq_*')):
         shutil.rmtree(file)
 
 

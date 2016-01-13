@@ -1,19 +1,53 @@
 #!/usr/bin/env python
 """
-A simple and reliable file movement utility.
+buffalofq_mover:  A simple and reliable file movement tool.
 
-To do:
-    - add remote source
-    - add local dest
-    - add crc check on dest
-    - add multiple pre & post actions
+usage: buffalofq_mover [-h] [--limit-total LIMIT_TOTAL] [--force]
+                       [--log-dir LOG_DIR]
+                       [--log-level {debug,info,warning,error,critical}]
+                       [--console-log] [--no-console-log] [--version]
+                       [--config-name CONFIG_NAME] [--config-fqfn CONFIG_FQFN]
+                       [--long-help]
+
+optional arguments:
+  -h, --help            show minimal help and exit
+  --long-help           show verbose help and exit
+  --limit-total LIMIT_TOTAL
+                        -1 = no limit - so run continuously,
+                        0 = no limit - run until you are out of files,
+                        > 0 = process this many files then quit,
+                        default is 0
+  --force               forces immediate run even if polling duration not met
+  --log-dir LOG_DIR
+  --log-level {debug,info,warning,error,critical}
+                        logging level - overrides config, default is debug
+  --console-log         log to stdout as well as to file system
+  --no-console-log      suppress logging to stdout
+  --version             displays version number
+  --config-name CONFIG_NAME
+                        Identifies the config by name within the xdg config dir.
+                        On linux this directory would be:
+                            $HOME/.config/buffalofq_mover
+  --config-fqfn CONFIG_FQFN
+                        Identifies the config by fully-qualified file name
+
+Configuration of buffalofq is simple, but is required.  Most configuration
+items default to intuitive settings (ex: 22 for port), but some information
+will always be required.  Examples of required fields include:
+   - source_dir         source file directory
+   - source_fn          source filename - wildcarded in quotes
+   - dest_host          destination host name
+   - dest_dir           destination directory name
+   - dest_fn            destination filename - None defaults to source filename
+
+Please see the project wiki for documentation, examples, and a FAQ:
+    https://github.com/kenfar/buffalofq/wiki
+
 """
 
 import os, sys, time
-
-import argparse
+import argparse, getpass, logging
 import errno
-import logging
 from pprint import pprint as pp
 from os.path import isfile, isdir, exists, dirname, basename, join as pjoin
 
@@ -34,6 +68,7 @@ from buffalofq._version import __version__
 
 logger   = None   # will get set to logging api later
 APP_NAME = 'buffalofq_mover'
+USER = getpass.getuser()
 
 
 
@@ -54,7 +89,8 @@ def main():
     instance_name = APP_NAME + '_' + config_name
 
     # setup logging
-    paramiko.util.log_to_file(pjoin(log_dir, 'buffalofq_paramiko.log'))
+    # since paramiko is so verbose, we're going to set it to just errors
+    paramiko.util.log_to_file(pjoin(log_dir, 'buffalofq_paramiko.log'), level='ERROR')
     logger    = setup_logger(log_to_console=True, log_level=config['log_level'], log_dir=log_dir)
 
     # Check to see if it's already running:
@@ -69,7 +105,7 @@ def main():
         logger.warning('buffalofq_mover has been suppressed - will terminate')
         sys.exit(0)
 
-    # Move files
+    # move files for all feeds
     logger.info('Buffalofq starting now')
     logger.info('config_dir:         %s', config_dir)
     logger.info('audit_dir:          %s', audit_dir)
@@ -100,7 +136,6 @@ def main():
 
 def get_args():
     parser = argparse.ArgumentParser(description='A simple and reliable file movement utility')
-    parser.add_argument('--feedname')
     parser.add_argument('--limit-total',
                         type=int,
                         help=('-1 = no limit - so run continuously, '
@@ -122,8 +157,6 @@ def get_args():
     parser.add_argument('--no-console-log',
                         action='store_false',
                         dest='log_to_console')
-    parser.add_argument('--key-filename',
-                        help='name of ssh keyfile to use')
     parser.add_argument('--version',
                         action='version',
                         version=__version__,
@@ -133,8 +166,14 @@ def get_args():
     parser.add_argument('--config-fqfn',
                         help='Identifies the config by file name')
     parser.add_argument('--long-help',
+                        action='store_true',
                         help='Provides more verbose help')
     args   = parser.parse_args()
+
+    if args.long_help:
+        print(__doc__)
+        sys.exit(0)
+
     return vars(args)
 
 
@@ -165,7 +204,15 @@ def setup_config(args, name):
                            'log_dir':          {},
                            'log_level':       {'required': True,
                                                'enum': ['debug', 'info', 'warning', 'error', 'critical']},
+                           'log_to_console':  {'required': True,
+                                               'type':     'boolean'},
+                           'long_help':       {'required': True,
+                                               'type':     'boolean'},
                            'sort_key':        {'required': True},
+                           'force':           {'required': True,
+                                               'type':     'boolean'},
+                           'config_name':     {'required': True},
+                           'config_fqfn':     {'required': True},
                            'source_host':     {'required': True,
                                                'type':     'string',
                                                'blank':    False },
@@ -179,10 +226,10 @@ def setup_config(args, name):
                                                'type':     'string',
                                                'blank':    False},
                            'source_post_dir': {'required': False,
-                                               'type':     'string',
+                                               'type':     [None, 'string'],
                                                'blank':    True},
                            'source_post_action': {'required': True,
-                                                'enum': ['delete','move','pass'] },
+                                                'enum': [None, 'delete','move'] },
                            'dest_host':       {'required': True,
                                                'type':     'string',
                                                'blank':    False },
@@ -192,22 +239,27 @@ def setup_config(args, name):
                            'dest_dir':        {'required': True,
                                                'type':     'string',
                                                'blank':    False},
-                           'source_fn':       {'required': False,
-                                               'type':     'string',
-                                               'blank':    True},
+                           'dest_post_fn':    {'required': False,
+                                               'type':     [None, 'string']},
                            'dest_post_dir':   {'required': False,
-                                               'type':     'string',
-                                               'blank':    False},
+                                               'type':     [None, 'string']},
                            'dest_post_action': {'required': True,
-                                                'enum': ['symlink','pass'] }
-                                        }
+                                                'enum': [None, 'move', 'symlink'] }
+                                        },
+                        'additionalProperties':  False
                     }
-    config_defaults = {'status':       'enabled',
-                       'limit_total':   0  ,
-                       'source_host':  'localhost',
-                       'key_filename': 'id_auto',
-                       'log_level':    'debug',
-                       'sort_key':     None }
+    config_defaults = {'status':          'enabled',
+                       'polling_seconds': 300,
+                       'port':            22,
+                       'limit_total':     0,
+                       'source_host':     'localhost',
+                       'source_user':     USER,
+                       'dest_user':       USER,
+                       'dest_post_dir':   None,
+                       'dest_post_fn':    None,
+                       'key_filename':    'id_buffalofq_rsa',
+                       'log_level':       'debug',
+                       'sort_key':        None }
 
     config = conf.ConfigManager(config_schema)
 
@@ -229,7 +281,12 @@ def setup_config(args, name):
         assert isdir(config.cm_config['log_dir'])
 
     #--- validate the consolidated config:
+    if not config.cm_config['config_name'] and not config.cm_config['config_fqfn']:
+        print('CRITICAL: a config file must be provided')
+        sys.exit(1)
+
     config.validate()
+
     if config.cm_config['source_host'] != 'localhost':
         print('CRITICAL: Source_host of other than localhost not yet supported')
         sys.exit(1)

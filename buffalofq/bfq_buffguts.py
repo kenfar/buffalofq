@@ -89,7 +89,7 @@ class HandleOneFeed(object):
                 processed_last_time = time.time()
             elif force:
                 if self.files:
-                    logger.info('Insufficient Polling Duration - will force anyway')
+                    logger.info('Insufficient polling duration - will force anyway')
                     self.do_all_files()
                 processed_last_time = time.time()
             else:
@@ -165,12 +165,9 @@ class HandleOneFeed(object):
         else:
             self.auditor.write(step=step, status='start', fn='')
             source_files   = os.listdir(self.feed['source_dir'])
-            #logger.debug('files found: %d' % len(source_files))
             filtered_files = fnmatch.filter(source_files,
                                             self.feed['source_fn'])
-            #logger.debug('files found - after filtering: %d' % len(filtered_files))
             sorted_filtered_files = self._sort_files(filtered_files)
-            #logger.debug('files found - after sorting: %d' % len(sorted_filtered_files))
             fail_check(step)
             self.auditor.write(step=step, status='stop', result='pass')
             return sorted_filtered_files
@@ -196,7 +193,6 @@ class HandleOneFeed(object):
 
 
     def _get_key(self):
-        # todo: allow user to specify key to use via config file
         # private key must not be encrypted (must not have a passphrase):
         pkfile = os.path.expanduser('~/.ssh/%s' % self.key_filename)
         return paramiko.RSAKey.from_private_key_file(pkfile)
@@ -219,14 +215,15 @@ class HandleOneFeed(object):
 class HandleOneFile(object):
 
     def __init__(self, feed, one_file, auditor, sftp):
+        assert one_file == basename(one_file)
         self.feed           = feed
-        self.file           = one_file
+        self.fn             = one_file
         self.auditor        = auditor
         self.sftp           = sftp
-        self.source_fqfn    = os.path.join(self.feed['source_dir'], self.file)
-        self.dest_fqfn      = os.path.join(self.feed['dest_dir'], self.file)
+        self.source_fqfn    = pjoin(self.feed['source_dir'], self.fn)
+        self.dest_fqfn      = pjoin(self.feed['dest_dir'], self.fn)
         self.dest_temp_fqfn = '%s.temp' % self.dest_fqfn
-        logger.info('HandleOneFile starting on file: %s' % one_file)
+        logger.debug('Moving file: %s' % one_file)
 
 
     def run_all_steps(self):
@@ -252,7 +249,7 @@ class HandleOneFile(object):
         if self._step_runner(6, self._do_source_post_actions) is False:
             return False
 
-        return True
+        return True # success
 
 
     def _step_runner(self, step, task):
@@ -267,7 +264,7 @@ class HandleOneFile(object):
         fail_check(step, substep='a')
         if good_to_run(step, self.auditor.status):
             fail_check(step, substep='b')
-            self.auditor.write(step=step, status='start', fn=self.file)
+            self.auditor.write(step=step, status='start', fn=self.fn)
             fail_check(step, substep='c')
 
             # run main task
@@ -314,7 +311,7 @@ class HandleOneFile(object):
             #print 'dest_fqfn:      %s' % dest_fqfn
             #print 'dest_temp_fqfn: %s' % dest_temp_fqfn
             #print 'dest dir: '
-            #pp(glob.glob(os.path.join(self.feed['dest_dir'],'*')))
+            #pp(glob.glob(pjoin(self.feed['dest_dir'],'*')))
             logger.error('_rename_dest_file got IOError - will remove dest and repeat rename')
             self.sftp.remove(self.dest_fqfn)
             self.sftp.rename(self.dest_temp_fqfn, self.dest_fqfn)
@@ -323,30 +320,35 @@ class HandleOneFile(object):
 
 
     def _do_dest_post_actions(self):
-        # remove temp dir?
-        # change privs?
-        # run crc check?
+        # todo: remove temp dir?
+        # todo: change privs?
         if self.feed.get('dest_post_action', 'unk') == 'crccheck':
             logger.error('dest_post_actions of crccheck not yet implemented')
             raise ValueError
-        elif self.feed.get('dest_post_action_symlink_dir'):
+        elif self.feed.get('dest_post_action', 'unk') == 'symlink':
             return task_make_dest_symlink(self.sftp,
-                            self.feed['dest_dir'],
-                            self.file,
-                            self.feed['dest_post_action_symlink_dir'],
-                            self.feed['dest_post_action_symlink_fn'])
+                                          self.feed['dest_dir'],
+                                          self.fn,
+                                          self.feed['dest_post_dir'],
+                                          self.feed['dest_post_fn'])
+        elif self.feed.get('dest_post_action', 'unk') == 'move':
+            return task_move_dest_file(self.sftp,
+                                       dest_dir=self.feed['dest_dir'],
+                                       dest_fn=basename(self.dest_fqfn),
+                                       dest_post_dir=self.feed['dest_post_dir'],
+                                       dest_post_fn=(self.feed['dest_post_fn'] or
+                                           basename(self.dest_fqfn)))
         else:
             return True
 
 
 
     def _do_source_post_actions(self):
-        # rename file
         if self.feed.get('source_post_action', 'unk') == 'delete':
             return task_delete_source_file(self.source_fqfn)
         elif self.feed.get('source_post_action', 'unk') == 'move':
             return task_move_source_file(self.source_fqfn,
-                           pjoin(self.feed['source_post_dir'], self.file))
+                           pjoin(self.feed['source_post_dir'], self.fn))
         else:
             return True
 
@@ -390,13 +392,27 @@ def task_make_dest_symlink(sftp, source_dir, source_fn, dest_dir, dest_fn=None):
     if not dest_fn:
        dest_fn = source_fn
 
-    source_fqfn  = os.path.join(source_dir, source_fn)
-    symlink_fqfn = os.path.join(dest_dir, dest_fn)
+    source_fqfn  = pjoin(source_dir, source_fn)
+    symlink_fqfn = pjoin(dest_dir, dest_fn)
     try:
         sftp.remove(symlink_fqfn)
     except IOError:
         pass # could be non-existing file which is ok
     sftp.symlink(source_fqfn, symlink_fqfn)
+    return True
+
+
+def task_move_dest_file(sftp, dest_dir, dest_fn, dest_post_dir, dest_post_fn):
+    """ Moves destination file
+    """
+    dest_fqfn      = pjoin(dest_dir, dest_fn)
+    dest_post_fqfn = pjoin(dest_post_dir, dest_post_fn)
+    try:
+        sftp.rename(dest_fqfn, dest_post_fqfn)
+    except IOError, e:
+        logger.error('task_move_dest_file got IOError - will remove dest_post file and repeat move')
+        sftp.remove(dest_post_fqfn)
+        sftp.rename(dest_fqfn, dest_post_fqfn)
     return True
 
 

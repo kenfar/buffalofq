@@ -8,6 +8,7 @@ import imp
 import glob
 import logging
 from pprint import pprint as pp
+from os.path import dirname, basename, exists, isdir, isfile, join as pjoin
 
 sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 import bfq_test_tools  as test_tools
@@ -66,7 +67,7 @@ class TestLocalToRemoteCopy(object):
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         feed['sort_key'] = None
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         files = ['f', 'e', 'd', 'c', 'b', 'a']
         assert OneFeed._sort_files(files) == ['f', 'e', 'd', 'c', 'b', 'a']
 
@@ -80,7 +81,7 @@ class TestLocalToRemoteCopy(object):
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         feed['sort_key'] = 'name'
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         files = ['f', 'e', 'd', 'c', 'b', 'a']
         assert OneFeed._sort_files(files) == ['a', 'b', 'c', 'd', 'e', 'f']
 
@@ -94,7 +95,7 @@ class TestLocalToRemoteCopy(object):
     def test_file_sorting_by_key(self):
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         OneFeed.feed['sort_key'] = 'field:date'
         files = ['foo_date-2015.csv', 'bar_date-2016.csv', 'mook_date-2014.csv']
         assert OneFeed._sort_files(files) == ['mook_date-2014.csv', 'foo_date-2015.csv', 'bar_date-2016.csv']
@@ -116,19 +117,19 @@ class TestLocalToRemoteCopy(object):
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
 
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         OneFeed.run(force=True)
         OneFeed.close()
 
-        assert len(glob.glob(os.path.join(self.source_data_dir,'good*'))) > 0
-        assert len(glob.glob(os.path.join(self.source_data_dir,'bad*')))  > 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'good*'))) > 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'bad*')))  > 0
 
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'good*')))   == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'bad*')))    == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'ignore*'))) > 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'good*')))   == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'bad*')))    == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'ignore*'))) > 0
 
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'good*')))    > 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'bad*')))     == 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'good*')))    > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'bad*')))     == 0
 
 
     def test_source_post_action_delete(self):
@@ -141,21 +142,21 @@ class TestLocalToRemoteCopy(object):
         feed['source_post_action'] = 'delete'
 
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         OneFeed.run(force=True)
         OneFeed.close()
 
         # first make this feature doesn't break any other logic:
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'good*')))    > 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'bad*')))     == 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'ignore*')))  > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'good*')))    > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'bad*')))     == 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'ignore*')))  > 0
 
         # next - lets see if it worked right:
-        assert len(glob.glob(os.path.join(self.source_data_dir,'good*'))) == 0
-        assert len(glob.glob(os.path.join(self.source_data_dir,'bad*')))  > 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'good*')))   == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'bad*')))    == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'ignore*'))) > 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'good*'))) == 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'bad*')))  > 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'good*')))   == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'bad*')))    == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'ignore*'))) > 0
 
 
 
@@ -169,51 +170,52 @@ class TestLocalToRemoteCopy(object):
         feed['source_post_action'] = 'move'
 
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         OneFeed.run(force=True)
         OneFeed.close()
 
         # first make this feature doesn't break any other logic:
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'good*')))    > 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'bad*')))     == 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'ignore*')))  > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'good*')))    > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'bad*')))     == 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'ignore*')))  > 0
 
         # next - lets see if it moved the source:
-        assert len(glob.glob(os.path.join(self.source_data_dir,'good*'))) == 0
-        assert len(glob.glob(os.path.join(self.source_data_dir,'bad*')))  > 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'good*')))   > 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'bad*')))    == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'ignore*'))) > 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'good*'))) == 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'bad*')))  > 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'good*')))   > 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'bad*')))    == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'ignore*'))) > 0
 
 
 
     def test_dest_post_action_symlink(self):
         """ Tests copying many files from source to dest
             AND ignoring other files in all directories.
-            AND running a crc check on dest files
+            AND symlinking dest files to post_dest dir
         """
         feed = _make_default_feed(self.source_data_dir, self.dest_data_dir)
         feed['dest_post_action'] = 'symlink'
-        feed['dest_post_action_symlink_dir'] = self.dest_link_dir
-        feed['dest_post_action_symlink_fn']  = 'good_link'
+        feed['dest_post_dir'] = self.dest_link_dir
+        feed['dest_post_fn']  = 'good_link'
 
         OneFeed = mod.HandleOneFeed(feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         OneFeed.run(force=True)
         OneFeed.close()
 
         # first make sure symlink doesn't break any other logic:
-        assert len(glob.glob(os.path.join(self.source_data_dir,'good*'))) > 0
-        assert len(glob.glob(os.path.join(self.source_data_dir,'bad*')))  > 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'good*')))   == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'bad*')))    == 0
-        assert len(glob.glob(os.path.join(self.source_arc_dir,'ignore*'))) > 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'good*')))    > 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'bad*')))     == 0
-        assert len(glob.glob(os.path.join(self.dest_data_dir,'ignore*')))  > 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'good*'))) > 0
+        assert len(glob.glob(pjoin(self.source_data_dir,'bad*')))  > 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'good*')))   == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'bad*')))    == 0
+        assert len(glob.glob(pjoin(self.source_arc_dir,'ignore*'))) > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'good*')))    > 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'bad*')))     == 0
+        assert len(glob.glob(pjoin(self.dest_data_dir,'ignore*')))  > 0
 
-        # next is the primary check for this test ###
-        assert len(glob.glob(os.path.join(self.dest_link_dir,'good_link*')))  == 1
+        # next is the primary check for this test
+        print(os.listdir(self.dest_link_dir))
+        assert len(glob.glob(pjoin(self.dest_link_dir,'good_link*')))  == 1
         # finally - consider cat'ing results and comparing to original to confirm
         # that it's a working symlink!
 
@@ -247,7 +249,7 @@ class TestTaskRecovery(object):
             for file_type in self.dirs[dir_key].keys():
                 if file_type != 'name':
                     for i in range(self.dirs[dir_key][file_type]):
-                        #print os.path.join(self.dirs[dir]['name'], file_type)
+                        #print pjoin(self.dirs[dir]['name'], file_type)
                         _make_file(self.dirs[dir_key]['name'], file_type)
 
         self.step = {}
@@ -296,7 +298,7 @@ class TestTaskRecovery(object):
         assert self._get_file_count(dir, '%s*' % file_type) == self.dirs[dir][file_type] + n
 
     def _get_file_count(self, dir_name, file_name):
-        real_file_list = [x for x in glob.glob(os.path.join(self.dirs[dir_name]['name'], file_name))
+        real_file_list = [x for x in glob.glob(pjoin(self.dirs[dir_name]['name'], file_name))
                           if os.path.isfile(x)]
 
         return len(real_file_list)
@@ -321,7 +323,7 @@ class TestTaskRecovery(object):
         mod.FAIL_SUBSTEP = failsubstep
         mod.FAIL_CATCH   = failcatch
         OneFeed = mod.HandleOneFeed(self.feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         try:
             OneFeed.run(force=True)
         except SystemExit:
@@ -343,7 +345,7 @@ class TestTaskRecovery(object):
                 self._assert_dir_changed_by_n('source_arc', 'good', n=0)
                 assert self._get_file_count('source_data', self.broken_file) == 1
             if failstep < 4:
-                destlist = glob.glob(os.path.join(self.dirs['dest_data']['name'],'good*'))
+                destlist = glob.glob(pjoin(self.dirs['dest_data']['name'],'good*'))
                 for file_name in destlist:
                     assert file_name.endswith('.temp')
 
@@ -381,7 +383,7 @@ class TestTaskRecovery(object):
         mod.FAIL_SUBSTEP = -1
         mod.FAIL_CATCH   = failcatch
         OneFeed = mod.HandleOneFeed(self.feed, self.feed_audit_dir, limit_total=0,
-                                    config_name=None, key_filename='id_auto')
+                                    config_name=None, key_filename='id_buffalofq_rsa')
         self.feed['source_post_dir']    = self.dirs['source_arc']['name']
         self.feed['source_post_action'] = 'move'
         OneFeed.run(force=True)
@@ -397,16 +399,16 @@ class TestTaskRecovery(object):
 
         if recovery_ran:
             # recovery second job will only process the 1 broken file!
-            assert len(glob.glob(os.path.join(self.dirs['source_data']['name'],'good*'))) == 2
-            assert len(glob.glob(os.path.join(self.dirs['source_data']['name'], self.broken_file))) == 0
-            assert len(glob.glob(os.path.join(self.dirs['source_arc']['name'],'good*')))  == 1
-            assert len(glob.glob(os.path.join(self.dirs['dest_data']['name'],'good*')))   == 1
+            assert len(glob.glob(pjoin(self.dirs['source_data']['name'],'good*'))) == 2
+            assert len(glob.glob(pjoin(self.dirs['source_data']['name'], self.broken_file))) == 0
+            assert len(glob.glob(pjoin(self.dirs['source_arc']['name'],'good*')))  == 1
+            assert len(glob.glob(pjoin(self.dirs['dest_data']['name'],'good*')))   == 1
         else:  # non-recovery second job will have processed all files
-            assert len(glob.glob(os.path.join(self.dirs['source_data']['name'],'good*'))) == 0
+            assert len(glob.glob(pjoin(self.dirs['source_data']['name'],'good*'))) == 0
             if self.broken_file: # could be '' on a non-recovery
-                assert len(glob.glob(os.path.join(self.dirs['source_data']['name'], self.broken_file))) == 0
-            assert len(glob.glob(os.path.join(self.dirs['source_arc']['name'],'good*')))  == 3
-            assert len(glob.glob(os.path.join(self.dirs['dest_data']['name'],'good*')))   == 3
+                assert len(glob.glob(pjoin(self.dirs['source_data']['name'], self.broken_file))) == 0
+            assert len(glob.glob(pjoin(self.dirs['source_arc']['name'],'good*')))  == 3
+            assert len(glob.glob(pjoin(self.dirs['dest_data']['name'],'good*')))   == 3
 
         # ensure feed status is right
         if failstep:
@@ -423,11 +425,11 @@ class TestTaskRecovery(object):
     def print_files(self):
         if verbose:
             print 'source_data_dir:'
-            pp(glob.glob(os.path.join(self.dirs['source_data']['name'],'*')), indent=4)
+            pp(glob.glob(pjoin(self.dirs['source_data']['name'],'*')), indent=4)
             print 'source_arc_dir:'
-            pp(glob.glob(os.path.join(self.dirs['source_arc']['name'],'*')), indent=4)
+            pp(glob.glob(pjoin(self.dirs['source_arc']['name'],'*')), indent=4)
             print 'dest_data_dir:'
-            pp(glob.glob(os.path.join(self.dirs['dest_data']['name'],'*')), indent=4)
+            pp(glob.glob(pjoin(self.dirs['dest_data']['name'],'*')), indent=4)
             print
 
     def test_recovery_all_steps_no_failure(self):
