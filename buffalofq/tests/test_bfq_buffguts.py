@@ -326,7 +326,7 @@ class TestTaskRecovery(object):
                                     config_name=None, key_filename='id_buffalofq_rsa')
         try:
             OneFeed.run(force=True)
-        except SystemExit:
+        except mod.TestHarnessError:
             print '~~~~~~ test_recovery - systemexit ~~~~~~~~'
         self.broken_file = OneFeed.auditor.status['fn']
 
@@ -367,6 +367,8 @@ class TestTaskRecovery(object):
                 #assert OneFeed.auditor.status['status'] == 'stop'
                 assert OneFeed.auditor.status['result'] == 'fail'
             else:
+                print('failsubstep: %s' % failsubstep)
+                print('failcatch:   %s' % failcatch)
                 assert OneFeed.auditor.status['step']   == failstep
                 assert OneFeed.auditor.status['status'] == 'start'
                 assert OneFeed.auditor.status['result'] == 'tbd'
@@ -603,10 +605,10 @@ def _make_default_feed(source_data_dir, dest_data_dir):
     feed['dest_host']       = 'localhost'
     feed['dest_user']       = DEST_USER
     feed['dest_dir']        = dest_data_dir
-    feed['dest_fn']         = ''
+    feed['dest_fn']         = None
     feed['port']            = 22
-    feed['source_post_action'] = ''
-    feed['source_post_dir']    = ''
+    feed['source_post_action'] = None
+    feed['source_post_dir']    = None
     return feed
 
 def _make_file(dir, prefix):

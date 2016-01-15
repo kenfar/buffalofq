@@ -118,8 +118,8 @@ class HandleOneFeed(object):
                                                 one_file,
                                                 self.auditor,
                                                 self.sftp)
-                if not handle_one_file.run_all_steps():
-                    break
+                handle_one_file.run_all_steps()
+
                 self.file_cnt += 1
                 if self.limit_total > 0 and self.file_cnt >= self.limit_total:
                     logger.debug('limit_total reached, file movement stopped')
@@ -231,25 +231,12 @@ class HandleOneFile(object):
             Returns True or False: False if any task fails.
         """
 
-        if self._step_runner(1, self._do_source_pre_actions) is False:
-            return False
-
-        if self._step_runner(2, self._do_dest_pre_actions) is False:
-            return False
-
-        if self._step_runner(3, self._copy_file) is False:
-            return False
-
-        if self._step_runner(4, self._rename_dest_file) is False:
-            return False
-
-        if self._step_runner(5, self._do_dest_post_actions) is False:
-            return False
-
-        if self._step_runner(6, self._do_source_post_actions) is False:
-            return False
-
-        return True # success
+        self._step_runner(1, self._do_source_pre_actions)
+        self._step_runner(2, self._do_dest_pre_actions)
+        self._step_runner(3, self._copy_file)
+        self._step_runner(4, self._rename_dest_file)
+        self._step_runner(5, self._do_dest_post_actions)
+        self._step_runner(6, self._do_source_post_actions)
 
 
     def _step_runner(self, step, task):
@@ -260,7 +247,6 @@ class HandleOneFile(object):
            Note that most of this code is overhead - validation, auditing, and
            enabling the test-harness to force failures.
         """
-        result = None
         fail_check(step, substep='a')
         if good_to_run(step, self.auditor.status):
             fail_check(step, substep='b')
@@ -268,25 +254,24 @@ class HandleOneFile(object):
             fail_check(step, substep='c')
 
             # run main task
-            result = task()
-            assert result is not None
-            if fail_check(step, substep='d'):
-                result = False
+            try:
+                task()
+                fail_check(step, substep='d')
+            except TestHarnessError:
+                self.auditor.write(step=step, status='stop', result=False)
+                raise
+            else:
+                self.auditor.write(step=step, status='stop', result=True)
 
-            assert(result is not None)
-            self.auditor.write(step=step, status='stop', result=result)
             fail_check(step, substep='e')
         else:
             logger.info('HandleOneFile._step_runner: step was bypassed: %d' % step)
-
-        assert result in [None, True, False]
-        return result
 
 
     def _do_source_pre_actions(self):
         # rename file
         # move file
-        return True
+        return
 
 
     def _do_dest_pre_actions(self):
@@ -294,12 +279,12 @@ class HandleOneFile(object):
         # check for dups?
         # create directory?
         # check for file differences?
-        return True
+        return
 
 
     def _copy_file(self):
         self.sftp.put(self.source_fqfn, self.dest_temp_fqfn)
-        return True
+        return
 
 
     def _rename_dest_file(self):
@@ -315,42 +300,45 @@ class HandleOneFile(object):
             logger.error('_rename_dest_file got IOError - will remove dest and repeat rename')
             self.sftp.remove(self.dest_fqfn)
             self.sftp.rename(self.dest_temp_fqfn, self.dest_fqfn)
-        return True
+        return
 
 
 
     def _do_dest_post_actions(self):
         # todo: remove temp dir?
         # todo: change privs?
-        if self.feed.get('dest_post_action', 'unk') == 'crccheck':
-            logger.error('dest_post_actions of crccheck not yet implemented')
-            raise ValueError
-        elif self.feed.get('dest_post_action', 'unk') == 'symlink':
-            return task_make_dest_symlink(self.sftp,
-                                          self.feed['dest_dir'],
-                                          self.fn,
-                                          self.feed['dest_post_dir'],
-                                          self.feed['dest_post_fn'])
-        elif self.feed.get('dest_post_action', 'unk') == 'move':
-            return task_move_dest_file(self.sftp,
-                                       dest_dir=self.feed['dest_dir'],
-                                       dest_fn=basename(self.dest_fqfn),
-                                       dest_post_dir=self.feed['dest_post_dir'],
-                                       dest_post_fn=(self.feed['dest_post_fn'] or
-                                           basename(self.dest_fqfn)))
+        if self.feed.get('dest_post_action') is None:
+            pass
+        elif self.feed.get('dest_post_action').strip() == '':
+            pass
+        elif self.feed['dest_post_action'] == 'symlink':
+            task_make_dest_symlink(self.sftp,
+                                   self.feed['dest_dir'],
+                                   self.fn,
+                                   self.feed['dest_post_dir'],
+                                   self.feed['dest_post_fn'])
+        elif self.feed['dest_post_action'] == 'move':
+            task_move_dest_file(self.sftp,
+                                dest_dir=self.feed['dest_dir'],
+                                dest_fn=basename(self.dest_fqfn),
+                                dest_post_dir=self.feed['dest_post_dir'],
+                                dest_post_fn=(self.feed['dest_post_fn'] or basename(self.dest_fqfn)))
         else:
-            return True
+            raise ValueError('Invalid dest_post_action: %s' % self.feed['source_post_action'])
 
 
 
     def _do_source_post_actions(self):
-        if self.feed.get('source_post_action', 'unk') == 'delete':
-            return task_delete_source_file(self.source_fqfn)
-        elif self.feed.get('source_post_action', 'unk') == 'move':
-            return task_move_source_file(self.source_fqfn,
-                           pjoin(self.feed['source_post_dir'], self.fn))
+        if self.feed.get('source_post_action') is None:
+            pass
+        elif self.feed.get('source_post_action').strip() == '':
+            pass
+        elif self.feed['source_post_action'] == 'delete':
+            task_delete_source_file(self.source_fqfn)
+        elif self.feed['source_post_action'] == 'move':
+            task_move_source_file(self.source_fqfn, pjoin(self.feed['source_post_dir'], self.fn))
         else:
-            return True
+            raise ValueError('Invalid source_post_action: %s' % self.feed['source_post_action'])
 
 
 
@@ -359,13 +347,13 @@ def task_delete_source_file(source_fqfn):
         os.remove(source_fqfn)
     except IOError as e:
         if e.errno == errno.ENOENT:
-            return True
+            return
         else:
-            return False
+            raise
     except:
-        return False
+        raise
     else:
-        return True
+        return
 
 
 
@@ -375,13 +363,13 @@ def task_move_source_file(old_fqfn, new_fqfn):
     except OSError as e:
         if (e.errno == errno.ENOENT
         and os.path.exists(new_fqfn)):
-            return True
+            return
         else:
-            return False
+            raise
     except:
-        return False
+        raise
     else:
-        return True
+        return
 
 
 
@@ -399,7 +387,7 @@ def task_make_dest_symlink(sftp, source_dir, source_fn, dest_dir, dest_fn=None):
     except IOError:
         pass # could be non-existing file which is ok
     sftp.symlink(source_fqfn, symlink_fqfn)
-    return True
+    return
 
 
 def task_move_dest_file(sftp, dest_dir, dest_fn, dest_post_dir, dest_post_fn):
@@ -413,7 +401,7 @@ def task_move_dest_file(sftp, dest_dir, dest_fn, dest_post_dir, dest_post_fn):
         logger.error('task_move_dest_file got IOError - will remove dest_post file and repeat move')
         sftp.remove(dest_post_fqfn)
         sftp.rename(dest_fqfn, dest_post_fqfn)
-    return True
+    return
 
 
 
@@ -432,12 +420,8 @@ def fail_check(step, substep=None):
     """
     if step == FAIL_STEP:
         if (substep == FAIL_SUBSTEP or substep is None):
-            if FAIL_CATCH:
-                return True
-            else:
-                sys.exit(0)
+            raise TestHarnessError
 
-    return False
 
 
 
@@ -492,3 +476,5 @@ def filename_field_get(filename, key):
             if kv_parts[0] == key:
                 return kv_parts[1]
 
+class TestHarnessError(Exception):
+    pass

@@ -291,6 +291,8 @@ def setup_config(args, name):
         print('CRITICAL: Source_host of other than localhost not yet supported')
         sys.exit(1)
 
+    print('log_to_console: %s' % config.cm_config['log_to_console'])
+    sys.exit(1)
     return config.cm_config
 
 
