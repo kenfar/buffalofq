@@ -1,7 +1,7 @@
 appdirs==1.4.0
 cletus==1.0.12
 envoy==0.0.3
-paramiko==1.16.0
+paramiko==2.0.9
 py==1.4.31
 pycrypto==2.6.1
 PyYAML==3.11
