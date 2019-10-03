@@ -4,5 +4,5 @@ envoy==0.0.3
 paramiko==1.16.0
 py==1.4.31
 pycrypto==2.6.1
-PyYAML==3.11
+PyYAML==5.1
 validictory==1.0.1
